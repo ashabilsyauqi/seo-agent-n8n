@@ -1,0 +1,759 @@
+{
+  "id": "seoWfIngestion01",
+  "name": "SEO · 01 · Ingestion Knowledge Base",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📚 Ingestion knowledge base\nMengambil **semua post & page** WordPress lewat REST API, mengubahnya jadi Markdown, memotong per section, lalu menyimpan embedding **bge-m3** ke Postgres **pgvector**.\n\n- **Incremental**: hanya halaman baru/berubah yang di-embed ulang.\n- Diproses **per 10 halaman**, jadi progres tersimpan walau run terhenti.\n- **Uji cepat**: `INGEST_MAX_PAGES=20` di .env (atau ubah `max_pages` di ⚙️ Config).\n- **Re-index total**: set `force_reindex` = true sekali jalan.\n- Jadwal 02:00 aktif karena workflow sudah di-**Publish**.",
+        "height": 280,
+        "width": 540
+      },
+      "id": "2e13f9da-1f3e-57d3-b77c-ae9e3084eed1",
+      "name": "Catatan: alur",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### 🗑️ Halaman yang dihapus di WordPress\nDihapus juga dari knowledge base. Dilewati saat mode uji (`max_pages` > 0) atau bila data yang terambil < 50% indeks lama.",
+        "height": 330,
+        "width": 480,
+        "color": 3
+      },
+      "id": "05f4c778-3867-552a-946c-84fce6d30a7d",
+      "name": "Catatan: hapus",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### 🔁 Per 10 halaman\nMarkdown → chunk → hapus chunk lama → embedding **bge-m3** (Ollama) → simpan. Splitter di bawah hanya pengaman; chunk sudah dipotong di node ✂️.",
+        "height": 640,
+        "width": 1640,
+        "color": 7
+      },
+      "id": "ff5da019-22b0-55ae-82ae-cd3a29732947",
+      "name": "Catatan: loop",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        220
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "f8119f4a-30e3-5d37-9e20-2a2f13208000",
+      "name": "Jalankan manual",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 2
+            }
+          ]
+        }
+      },
+      "id": "b7747c90-e469-55f7-9d45-da6d0f2971df",
+      "name": "Jadwal harian 02:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "4cd91aa3-aa67-5bd9-a64d-001c4e4a507c",
+              "name": "wp_base_url",
+              "value": "={{ ($env.WP_BASE_URL || ('https://' + $env.SITE_DOMAIN)).replace(/\\/+$/, '') }}",
+              "type": "string"
+            },
+            {
+              "id": "43bdac7d-9b0e-533f-9230-4e1d5b5cc14c",
+              "name": "post_types",
+              "value": "={{ $env.WP_POST_TYPES || 'posts,pages' }}",
+              "type": "string"
+            },
+            {
+              "id": "26f04631-cf3b-5a7f-a7bd-bd47d32bd728",
+              "name": "max_pages",
+              "value": "={{ Number($env.INGEST_MAX_PAGES || 0) }}",
+              "type": "number"
+            },
+            {
+              "id": "adf72e52-49e5-5dd2-bf43-d2aa46253fb2",
+              "name": "force_reindex",
+              "value": false,
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8f3e6bb6-82e0-5efc-b0b2-ce035f16f975",
+      "name": "⚙️ Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT url, content_hash FROM seo_pages;",
+        "options": {}
+      },
+      "id": "4a7a514a-af6a-5919-b477-5d5e882d7df1",
+      "name": "📋 Indeks lama",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "seoPgCredential1",
+          "name": "Postgres · SEO DB"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Satu item per endpoint REST (posts, pages, CPT ...)\nconst cfg = $('⚙️ Config').first().json;\nreturn String(cfg.post_types).split(',').map((t) => t.trim()).filter(Boolean)\n  .map((t) => ({ json: { post_type: t, endpoint: `${cfg.wp_base_url}/wp-json/wp/v2/${t}` } }));\n"
+      },
+      "id": "bd7eb3df-0087-5a2f-8e97-7021dbb67fbe",
+      "name": "🧩 Daftar endpoint REST",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.endpoint }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "per_page",
+              "value": "100"
+            },
+            {
+              "name": "status",
+              "value": "publish"
+            },
+            {
+              "name": "_fields",
+              "value": "id,link,type,title,content,excerpt,modified_gmt"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; SEOContentGapBot/1.0; n8n)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "pagination": {
+            "pagination": {
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "page",
+                    "value": "={{ $pageCount + 1 }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ $pageCount >= Number($response.headers['x-wp-totalpages'] || 1) }}",
+              "limitPagesFetched": true,
+              "maxRequests": 100,
+              "requestInterval": 300
+            }
+          }
+        }
+      },
+      "id": "713f857a-8416-57a4-8443-0d85a8c9c997",
+      "name": "🌐 Ambil konten WordPress",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Halaman yang ada di indeks lama tapi sudah tidak ada di WordPress -> hapus dari knowledge base.\nconst cfg = $('⚙️ Config').first().json;\nif ((Number(cfg.max_pages) || 0) > 0) return []; // mode uji: jangan hapus apa pun\n\nconst current = new Set($input.all().map((i) => i.json.link).filter(Boolean));\nconst oldUrls = $('📋 Indeks lama').all().map((i) => i.json.url).filter(Boolean);\nif (!oldUrls.length) return [];\n// Pengaman: jika data WordPress yang terambil jauh lebih sedikit (API error/terpotong), jangan hapus.\nif (current.size < oldUrls.length * 0.5) return [];\n\nconst removed = oldUrls.filter((u) => !current.has(u));\nreturn removed.length ? [{ json: { removed, count: removed.length } }] : [];\n"
+      },
+      "id": "96f7112f-6ddb-5bea-a20f-2166bbf39df7",
+      "name": "🔍 Cari halaman terhapus",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM seo_chunks WHERE metadata->>'url' = ANY($1::text[]);\nDELETE FROM seo_pages WHERE url = ANY($1::text[]);",
+        "options": {
+          "queryReplacement": "={{ [ $json.removed ] }}"
+        }
+      },
+      "id": "aab508e5-aac4-5d95-915b-d464175512c2",
+      "name": "🗑️ Hapus dari knowledge base",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1340,
+        -100
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "seoPgCredential1",
+          "name": "Postgres · SEO DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- Utilitas Markdown (port dari seo_agent/common/markdown.py) ----\n// Dipakai sama persis untuk konten internal & kompetitor agar outline H1-H3 apple-to-apple.\nconst RE_IMAGE = /!\\[[^\\]]*\\]\\([^)]*\\)/g;\nconst RE_LINK = /\\[([^\\]]*)\\]\\((?:[^()]|\\([^)]*\\))*\\)/g;\nconst RE_CITATION = /\\[\\[?\\d{1,3}\\]?\\]/g;\nconst RE_BARE_URL_LINE = /^\\s*(?:[-*]\\s*)?<?https?:\\/\\/\\S+>?\\s*$/;\nconst RE_CHECKBOX_LINE = /^\\s*[-*]\\s*\\[[ xX]\\]\\s/;\nconst RE_FENCE = /^\\s{0,3}(```|~~~)/;\nconst RE_ATX = /^\\s{0,3}(#{1,6})\\s+(.+?)\\s*#*\\s*$/;\nconst RE_LIST_ITEM = /^\\s*(?:[-*+]|\\d+[.)])\\s+(.*)$/;\n\nfunction decodeEntities(s) {\n  if (!s) return '';\n  const named = { amp: '&', lt: '<', gt: '>', quot: '\"', apos: \"'\", nbsp: ' ', hellip: '…', ndash: '–', mdash: '—', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“' };\n  return String(s)\n    .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(Number(d)))\n    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n    .replace(/&([a-z]+);/gi, (m, n) => (named[n.toLowerCase()] ?? m));\n}\n\nfunction stripTags(html) {\n  return decodeEntities(String(html || '').replace(/<[^>]+>/g, ' ')).replace(/\\s+/g, ' ').trim();\n}\n\nfunction cleanHeadingText(text) {\n  return text.replace(RE_IMAGE, '').replace(RE_LINK, '$1').replace(/[*_`]+/g, '').replace(/\\\\([\\\\`*_{}\\[\\]()#+\\-.!])/g, '$1').replace(/\\s+/g, ' ').trim();\n}\n\nfunction normalizeSetext(md) {\n  const lines = md.split('\\n');\n  const out = [];\n  let inFence = false;\n  for (let i = 0; i < lines.length; i++) {\n    const line = lines[i];\n    if (RE_FENCE.test(line)) inFence = !inFence;\n    const nxt = lines[i + 1];\n    const isText = line.trim() && !/^[#\\-*>|+]/.test(line.trimStart());\n    if (!inFence && nxt !== undefined && isText) {\n      if (/^\\s{0,3}=+\\s*$/.test(nxt)) { out.push('# ' + line.trim()); i++; continue; }\n      if (/^\\s{0,3}-{2,}\\s*$/.test(nxt)) { out.push('## ' + line.trim()); i++; continue; }\n    }\n    out.push(line);\n  }\n  return out.join('\\n');\n}\n\nfunction extractOutline(md, maxLevel = 3) {\n  const outline = [];\n  let inFence = false;\n  for (const line of normalizeSetext(md).split('\\n')) {\n    if (RE_FENCE.test(line)) { inFence = !inFence; continue; }\n    if (inFence) continue;\n    const m = line.match(RE_ATX);\n    if (m) {\n      const level = m[1].length;\n      const text = cleanHeadingText(m[2]);\n      if (level <= maxLevel && text) outline.push([level, text]);\n    }\n  }\n  return outline;\n}\n\nfunction formatOutline(outline, maxItems = 80) {\n  if (!outline.length) return '(tidak ada heading terdeteksi)';\n  const lines = outline.slice(0, maxItems).map(([l, t]) => `${'  '.repeat(l - 1)}H${l}: ${t}`);\n  if (outline.length > maxItems) lines.push(`... (+${outline.length - maxItems} heading lainnya)`);\n  return lines.join('\\n');\n}\n\nfunction dropMenuLikeLists(lines, minRun = 12, maxWords = 4) {\n  const out = [];\n  let run = [];\n  const flush = () => {\n    const shortItems = run.filter((l) => RE_LIST_ITEM.test(l));\n    if (shortItems.length < minRun) out.push(...run);\n    run = [];\n  };\n  for (const line of lines) {\n    const item = line.match(RE_LIST_ITEM);\n    if (item && item[1].split(/\\s+/).filter(Boolean).length <= maxWords) run.push(line);\n    else if (!line.trim() && run.length) run.push(line);\n    else { flush(); out.push(line); }\n  }\n  flush();\n  return out;\n}\n\nfunction trimBeforeFirstH1(md) {\n  const m = md.match(/^\\s{0,3}#\\s+\\S/m);\n  if (m && m.index > 0 && m.index < md.length * 0.5) return md.slice(m.index);\n  return md;\n}\n\nfunction stripMarkdownNoise(md, { trimH1 = true } = {}) {\n  md = normalizeSetext(md);\n  if (trimH1) md = trimBeforeFirstH1(md);\n  md = md.replace(RE_IMAGE, '').replace(RE_LINK, '$1').replace(RE_CITATION, '');\n  let lines = md.split('\\n').map((l) => l.replace(/\\s+$/, ''))\n    .filter((l) => !RE_BARE_URL_LINE.test(l) && !RE_CHECKBOX_LINE.test(l))\n    .filter((l) => !['-', '*', '+'].includes(l.trim()));\n  // Heading: buang **bold** di dalam heading (\"## **Apa Itu X?**\" -> \"## Apa Itu X?\")\n  lines = lines.map((l) => { const m = l.match(RE_ATX); return m ? `${m[1]} ${cleanHeadingText(m[2])}` : l; });\n  lines = dropMenuLikeLists(lines);\n  return lines.join('\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n}\n\nfunction wordCount(text) {\n  return (String(text).match(/[\\p{L}\\p{N}_]+/gu) || []).length;\n}\n\nfunction truncateMarkdown(md, maxChars) {\n  if (md.length <= maxChars) return [md, false];\n  let cut = md.lastIndexOf('\\n\\n', maxChars);\n  if (cut < maxChars * 0.6) cut = maxChars;\n  return [md.slice(0, cut).trimEnd(), true];\n}\n// ---- akhir utilitas ----\n// Ubah respons REST WordPress jadi 1 item per halaman, lalu buang yang tidak berubah\n// sejak ingestion terakhir (incremental: hanya halaman baru/berubah yang di-embed ulang).\nconst cfg = $('⚙️ Config').first().json;\n\nfunction hash53(str, seed = 0) {\n  let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;\n  for (let i = 0; i < str.length; i++) {\n    const ch = str.charCodeAt(i);\n    h1 = Math.imul(h1 ^ ch, 2654435761);\n    h2 = Math.imul(h2 ^ ch, 1597334677);\n  }\n  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);\n  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);\n  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);\n}\n\nconst oldHash = new Map();\nfor (const it of $('📋 Indeks lama').all()) {\n  if (it.json.url) oldHash.set(it.json.url, it.json.content_hash);\n}\n\nconst seen = new Set();\nconst pages = [];\nfor (const it of $input.all()) {\n  const p = it.json;\n  if (!p || !p.link || seen.has(p.link)) continue;\n  if (p.content && p.content.protected) continue; // halaman ber-password\n  seen.add(p.link);\n  const title = decodeEntities((p.title && p.title.rendered) || '').trim() || p.link;\n  const html = (p.content && p.content.rendered) || '';\n  if (wordCount(stripTags(html)) < 80) continue; // halaman tipis (kontak, arsip, template kosong) tidak di-embed\n  pages.push({\n    url: p.link,\n    wp_id: p.id,\n    post_type: p.type,\n    title,\n    html,\n    meta_description: stripTags(p.excerpt && p.excerpt.rendered).slice(0, 300),\n    modified_gmt: p.modified_gmt ? `${p.modified_gmt}Z` : null,\n    content_hash: hash53(`${p.modified_gmt}|${title}|${html}`),\n  });\n}\n\n// Terbaru dulu, supaya mode uji (max_pages) mengambil konten paling segar.\npages.sort((a, b) => String(b.modified_gmt).localeCompare(String(a.modified_gmt)));\nconst limit = Number(cfg.max_pages) || 0;\nconst selected = limit > 0 ? pages.slice(0, limit) : pages;\nconst changed = cfg.force_reindex ? selected : selected.filter((p) => oldHash.get(p.url) !== p.content_hash);\n\nreturn changed.map((p) => ({ json: { ...p, is_new: !oldHash.has(p.url) } }));\n"
+      },
+      "id": "8626f48b-0ce9-54eb-9318-56dca2ef6c0c",
+      "name": "🧹 Normalisasi & cek perubahan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 10,
+        "options": {}
+      },
+      "id": "08031059-41ab-5f29-8bb1-10512e156896",
+      "name": "🔁 Per 10 halaman",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*) AS total_halaman, coalesce(sum(chunk_count), 0) AS total_chunk,\n       to_char(max(indexed_at) AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD HH24:MI') AS terakhir_index_wib\nFROM seo_pages;",
+        "options": {}
+      },
+      "id": "a1e395d8-450b-5bc7-9aea-4f0b5b78e2f5",
+      "name": "✅ Selesai: isi knowledge base",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1600,
+        60
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "seoPgCredential1",
+          "name": "Postgres · SEO DB"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "html": "={{ $json.html }}",
+        "destinationKey": "markdown",
+        "options": {
+          "bulletMarker": "-",
+          "ignore": "script,style,noscript,iframe,svg,form,button,figure,img,video,audio"
+        }
+      },
+      "id": "c7e23e2f-8e39-55f0-a8f0-eb1d2c34f22a",
+      "name": "📝 HTML → Markdown",
+      "type": "n8n-nodes-base.markdown",
+      "typeVersion": 1,
+      "position": [
+        1580,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- Utilitas Markdown (port dari seo_agent/common/markdown.py) ----\n// Dipakai sama persis untuk konten internal & kompetitor agar outline H1-H3 apple-to-apple.\nconst RE_IMAGE = /!\\[[^\\]]*\\]\\([^)]*\\)/g;\nconst RE_LINK = /\\[([^\\]]*)\\]\\((?:[^()]|\\([^)]*\\))*\\)/g;\nconst RE_CITATION = /\\[\\[?\\d{1,3}\\]?\\]/g;\nconst RE_BARE_URL_LINE = /^\\s*(?:[-*]\\s*)?<?https?:\\/\\/\\S+>?\\s*$/;\nconst RE_CHECKBOX_LINE = /^\\s*[-*]\\s*\\[[ xX]\\]\\s/;\nconst RE_FENCE = /^\\s{0,3}(```|~~~)/;\nconst RE_ATX = /^\\s{0,3}(#{1,6})\\s+(.+?)\\s*#*\\s*$/;\nconst RE_LIST_ITEM = /^\\s*(?:[-*+]|\\d+[.)])\\s+(.*)$/;\n\nfunction decodeEntities(s) {\n  if (!s) return '';\n  const named = { amp: '&', lt: '<', gt: '>', quot: '\"', apos: \"'\", nbsp: ' ', hellip: '…', ndash: '–', mdash: '—', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“' };\n  return String(s)\n    .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(Number(d)))\n    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n    .replace(/&([a-z]+);/gi, (m, n) => (named[n.toLowerCase()] ?? m));\n}\n\nfunction stripTags(html) {\n  return decodeEntities(String(html || '').replace(/<[^>]+>/g, ' ')).replace(/\\s+/g, ' ').trim();\n}\n\nfunction cleanHeadingText(text) {\n  return text.replace(RE_IMAGE, '').replace(RE_LINK, '$1').replace(/[*_`]+/g, '').replace(/\\\\([\\\\`*_{}\\[\\]()#+\\-.!])/g, '$1').replace(/\\s+/g, ' ').trim();\n}\n\nfunction normalizeSetext(md) {\n  const lines = md.split('\\n');\n  const out = [];\n  let inFence = false;\n  for (let i = 0; i < lines.length; i++) {\n    const line = lines[i];\n    if (RE_FENCE.test(line)) inFence = !inFence;\n    const nxt = lines[i + 1];\n    const isText = line.trim() && !/^[#\\-*>|+]/.test(line.trimStart());\n    if (!inFence && nxt !== undefined && isText) {\n      if (/^\\s{0,3}=+\\s*$/.test(nxt)) { out.push('# ' + line.trim()); i++; continue; }\n      if (/^\\s{0,3}-{2,}\\s*$/.test(nxt)) { out.push('## ' + line.trim()); i++; continue; }\n    }\n    out.push(line);\n  }\n  return out.join('\\n');\n}\n\nfunction extractOutline(md, maxLevel = 3) {\n  const outline = [];\n  let inFence = false;\n  for (const line of normalizeSetext(md).split('\\n')) {\n    if (RE_FENCE.test(line)) { inFence = !inFence; continue; }\n    if (inFence) continue;\n    const m = line.match(RE_ATX);\n    if (m) {\n      const level = m[1].length;\n      const text = cleanHeadingText(m[2]);\n      if (level <= maxLevel && text) outline.push([level, text]);\n    }\n  }\n  return outline;\n}\n\nfunction formatOutline(outline, maxItems = 80) {\n  if (!outline.length) return '(tidak ada heading terdeteksi)';\n  const lines = outline.slice(0, maxItems).map(([l, t]) => `${'  '.repeat(l - 1)}H${l}: ${t}`);\n  if (outline.length > maxItems) lines.push(`... (+${outline.length - maxItems} heading lainnya)`);\n  return lines.join('\\n');\n}\n\nfunction dropMenuLikeLists(lines, minRun = 12, maxWords = 4) {\n  const out = [];\n  let run = [];\n  const flush = () => {\n    const shortItems = run.filter((l) => RE_LIST_ITEM.test(l));\n    if (shortItems.length < minRun) out.push(...run);\n    run = [];\n  };\n  for (const line of lines) {\n    const item = line.match(RE_LIST_ITEM);\n    if (item && item[1].split(/\\s+/).filter(Boolean).length <= maxWords) run.push(line);\n    else if (!line.trim() && run.length) run.push(line);\n    else { flush(); out.push(line); }\n  }\n  flush();\n  return out;\n}\n\nfunction trimBeforeFirstH1(md) {\n  const m = md.match(/^\\s{0,3}#\\s+\\S/m);\n  if (m && m.index > 0 && m.index < md.length * 0.5) return md.slice(m.index);\n  return md;\n}\n\nfunction stripMarkdownNoise(md, { trimH1 = true } = {}) {\n  md = normalizeSetext(md);\n  if (trimH1) md = trimBeforeFirstH1(md);\n  md = md.replace(RE_IMAGE, '').replace(RE_LINK, '$1').replace(RE_CITATION, '');\n  let lines = md.split('\\n').map((l) => l.replace(/\\s+$/, ''))\n    .filter((l) => !RE_BARE_URL_LINE.test(l) && !RE_CHECKBOX_LINE.test(l))\n    .filter((l) => !['-', '*', '+'].includes(l.trim()));\n  // Heading: buang **bold** di dalam heading (\"## **Apa Itu X?**\" -> \"## Apa Itu X?\")\n  lines = lines.map((l) => { const m = l.match(RE_ATX); return m ? `${m[1]} ${cleanHeadingText(m[2])}` : l; });\n  lines = dropMenuLikeLists(lines);\n  return lines.join('\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n}\n\nfunction wordCount(text) {\n  return (String(text).match(/[\\p{L}\\p{N}_]+/gu) || []).length;\n}\n\nfunction truncateMarkdown(md, maxChars) {\n  if (md.length <= maxChars) return [md, false];\n  let cut = md.lastIndexOf('\\n\\n', maxChars);\n  if (cut < maxChars * 0.6) cut = maxChars;\n  return [md.slice(0, cut).trimEnd(), true];\n}\n// ---- akhir utilitas ----\n// Markdown halaman internal: judul WordPress jadi satu-satunya H1, lalu isi konten yang sudah dibersihkan.\nfunction buildPageMarkdown(p) {\n  let body = stripMarkdownNoise(p.markdown || '', { trimH1: false });\n  // Heading H1 di dalam konten diturunkan jadi H2 supaya H1 tetap satu (judul halaman).\n  body = body.replace(/^#\\s+/gm, '## ');\n  return `# ${p.title}\\n\\n${body}`.trim();\n}\n// Header-aware chunking: potongan dipisah di batas H1/H2 (H3 tetap di dalam potongan), paragraf\n// digabung sampai ~CHUNK_SIZE karakter, section yang terlalu pendek digabung ke section berikutnya.\n// Setiap chunk diberi \"contextual header\" (judul + jalur section) sebelum di-embed.\nconst CHUNK = Number($env.CHUNK_SIZE || 1500);\nconst MIN_CHUNK = Math.round(CHUNK / 3); // section lebih pendek dari ini digabung dengan berikutnya\n\nfunction splitLong(text, max) {\n  if (text.length <= max) return [text];\n  const parts = [];\n  let buf = '';\n  for (const sentence of text.split(/(?<=[.!?])\\s+/)) {\n    if (buf && (buf + ' ' + sentence).length > max) { parts.push(buf.trim()); buf = ''; }\n    if (sentence.length > max) {\n      for (let i = 0; i < sentence.length; i += max) parts.push(sentence.slice(i, i + max));\n    } else buf += (buf ? ' ' : '') + sentence;\n  }\n  if (buf.trim()) parts.push(buf.trim());\n  return parts;\n}\n\nconst out = [];\nfor (const it of $input.all()) {\n  const p = it.json;\n  const md = buildPageMarkdown(p);\n\n  const chunks = [];\n  const head = { 1: p.title, 2: '', 3: '' };\n  const pathNow = () => [head[1], head[2], head[3]].filter(Boolean).join(' > ');\n  let buf = '';\n  let bufPath = pathNow();\n  const flush = () => { if (buf.trim()) chunks.push({ path: bufPath, body: buf.trim() }); buf = ''; };\n\n  const paras = md.split(/\\n{2,}/).map((x) => x.trim()).filter(Boolean);\n  for (const para of paras) {\n    const m = para.split('\\n')[0].match(RE_ATX);\n    if (m && m[1].length <= 3) {\n      const level = m[1].length;\n      if (level <= 2 && buf.length >= MIN_CHUNK) flush(); // batas section besar\n      head[level] = cleanHeadingText(m[2]);\n      for (let l = level + 1; l <= 3; l++) head[l] = '';\n      if (!buf) bufPath = pathNow();\n    }\n    for (const piece of splitLong(para, CHUNK)) {\n      if (buf && buf.length + piece.length + 2 > CHUNK) { flush(); bufPath = pathNow(); }\n      if (!buf) bufPath = pathNow();\n      buf = buf ? `${buf}\\n\\n${piece}` : piece;\n    }\n  }\n  flush();\n\n  chunks.forEach((c, i) => {\n    out.push({\n      json: {\n        text: `Halaman: ${p.title}\\nBagian: ${c.path}\\n\\n${c.body}`,\n        url: p.url,\n        title: p.title,\n        section: c.path,\n        chunk_index: i,\n        chunk_total: chunks.length,\n        post_type: p.post_type,\n        modified_gmt: p.modified_gmt,\n      },\n    });\n  });\n}\nreturn out;\n"
+      },
+      "id": "f6251241-2b80-5549-8ed2-af20b5709a0c",
+      "name": "✂️ Chunk + contextual header",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM seo_chunks WHERE metadata->>'url' = ANY($1::text[]);",
+        "options": {
+          "queryReplacement": "={{ [ [...new Set($input.all().map((i) => i.json.url))] ] }}"
+        }
+      },
+      "id": "3fd662b3-babf-5f06-8d37-83681d3e3a41",
+      "name": "🧽 Hapus chunk lama",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2020,
+        400
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "seoPgCredential1",
+          "name": "Postgres · SEO DB"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Node sebelumnya hanya berjalan sekali (DELETE), jadi ambil lagi semua chunk di sini.\nreturn $('✂️ Chunk + contextual header').all();\n"
+      },
+      "id": "fe4916aa-397e-5590-bbe7-6ed5dba295ed",
+      "name": "↩️ Teruskan chunk",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "tableName": "seo_chunks",
+        "embeddingBatchSize": 32,
+        "options": {}
+      },
+      "id": "fbaf1c0c-160a-5b91-a682-e7257c82debe",
+      "name": "🧠 Simpan ke pgvector",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePGVector",
+      "typeVersion": 1.3,
+      "position": [
+        2460,
+        400
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "seoPgCredential1",
+          "name": "Postgres · SEO DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "={{ $env.EMBEDDING_MODEL || 'bge-m3' }}"
+      },
+      "id": "120a7cc0-26c0-506b-95bb-dab5fb9865a2",
+      "name": "Embeddings Ollama (bge-m3)",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+      "typeVersion": 1,
+      "position": [
+        2380,
+        620
+      ],
+      "credentials": {
+        "ollamaApi": {
+          "id": "seoOllamaCred001",
+          "name": "Ollama · lokal"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonMode": "expressionData",
+        "jsonData": "={{ $json.text }}",
+        "textSplittingMode": "custom",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "url",
+                "value": "={{ $json.url }}"
+              },
+              {
+                "name": "title",
+                "value": "={{ $json.title }}"
+              },
+              {
+                "name": "section",
+                "value": "={{ $json.section }}"
+              },
+              {
+                "name": "chunk_index",
+                "value": "={{ $json.chunk_index }}"
+              },
+              {
+                "name": "chunk_total",
+                "value": "={{ $json.chunk_total }}"
+              },
+              {
+                "name": "post_type",
+                "value": "={{ $json.post_type }}"
+              },
+              {
+                "name": "modified_gmt",
+                "value": "={{ $json.modified_gmt }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "284ef465-cf9c-5498-a816-cd26fa0ec0d6",
+      "name": "Data Loader (teks + metadata)",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [
+        2560,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "chunkSize": 4000,
+        "chunkOverlap": 0,
+        "options": {}
+      },
+      "id": "4b8a2580-bb0d-570c-81b1-4b2a70b9c80a",
+      "name": "Splitter pengaman",
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        2640,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- Utilitas Markdown (port dari seo_agent/common/markdown.py) ----\n// Dipakai sama persis untuk konten internal & kompetitor agar outline H1-H3 apple-to-apple.\nconst RE_IMAGE = /!\\[[^\\]]*\\]\\([^)]*\\)/g;\nconst RE_LINK = /\\[([^\\]]*)\\]\\((?:[^()]|\\([^)]*\\))*\\)/g;\nconst RE_CITATION = /\\[\\[?\\d{1,3}\\]?\\]/g;\nconst RE_BARE_URL_LINE = /^\\s*(?:[-*]\\s*)?<?https?:\\/\\/\\S+>?\\s*$/;\nconst RE_CHECKBOX_LINE = /^\\s*[-*]\\s*\\[[ xX]\\]\\s/;\nconst RE_FENCE = /^\\s{0,3}(```|~~~)/;\nconst RE_ATX = /^\\s{0,3}(#{1,6})\\s+(.+?)\\s*#*\\s*$/;\nconst RE_LIST_ITEM = /^\\s*(?:[-*+]|\\d+[.)])\\s+(.*)$/;\n\nfunction decodeEntities(s) {\n  if (!s) return '';\n  const named = { amp: '&', lt: '<', gt: '>', quot: '\"', apos: \"'\", nbsp: ' ', hellip: '…', ndash: '–', mdash: '—', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“' };\n  return String(s)\n    .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(Number(d)))\n    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n    .replace(/&([a-z]+);/gi, (m, n) => (named[n.toLowerCase()] ?? m));\n}\n\nfunction stripTags(html) {\n  return decodeEntities(String(html || '').replace(/<[^>]+>/g, ' ')).replace(/\\s+/g, ' ').trim();\n}\n\nfunction cleanHeadingText(text) {\n  return text.replace(RE_IMAGE, '').replace(RE_LINK, '$1').replace(/[*_`]+/g, '').replace(/\\\\([\\\\`*_{}\\[\\]()#+\\-.!])/g, '$1').replace(/\\s+/g, ' ').trim();\n}\n\nfunction normalizeSetext(md) {\n  const lines = md.split('\\n');\n  const out = [];\n  let inFence = false;\n  for (let i = 0; i < lines.length; i++) {\n    const line = lines[i];\n    if (RE_FENCE.test(line)) inFence = !inFence;\n    const nxt = lines[i + 1];\n    const isText = line.trim() && !/^[#\\-*>|+]/.test(line.trimStart());\n    if (!inFence && nxt !== undefined && isText) {\n      if (/^\\s{0,3}=+\\s*$/.test(nxt)) { out.push('# ' + line.trim()); i++; continue; }\n      if (/^\\s{0,3}-{2,}\\s*$/.test(nxt)) { out.push('## ' + line.trim()); i++; continue; }\n    }\n    out.push(line);\n  }\n  return out.join('\\n');\n}\n\nfunction extractOutline(md, maxLevel = 3) {\n  const outline = [];\n  let inFence = false;\n  for (const line of normalizeSetext(md).split('\\n')) {\n    if (RE_FENCE.test(line)) { inFence = !inFence; continue; }\n    if (inFence) continue;\n    const m = line.match(RE_ATX);\n    if (m) {\n      const level = m[1].length;\n      const text = cleanHeadingText(m[2]);\n      if (level <= maxLevel && text) outline.push([level, text]);\n    }\n  }\n  return outline;\n}\n\nfunction formatOutline(outline, maxItems = 80) {\n  if (!outline.length) return '(tidak ada heading terdeteksi)';\n  const lines = outline.slice(0, maxItems).map(([l, t]) => `${'  '.repeat(l - 1)}H${l}: ${t}`);\n  if (outline.length > maxItems) lines.push(`... (+${outline.length - maxItems} heading lainnya)`);\n  return lines.join('\\n');\n}\n\nfunction dropMenuLikeLists(lines, minRun = 12, maxWords = 4) {\n  const out = [];\n  let run = [];\n  const flush = () => {\n    const shortItems = run.filter((l) => RE_LIST_ITEM.test(l));\n    if (shortItems.length < minRun) out.push(...run);\n    run = [];\n  };\n  for (const line of lines) {\n    const item = line.match(RE_LIST_ITEM);\n    if (item && item[1].split(/\\s+/).filter(Boolean).length <= maxWords) run.push(line);\n    else if (!line.trim() && run.length) run.push(line);\n    else { flush(); out.push(line); }\n  }\n  flush();\n  return out;\n}\n\nfunction trimBeforeFirstH1(md) {\n  const m = md.match(/^\\s{0,3}#\\s+\\S/m);\n  if (m && m.index > 0 && m.index < md.length * 0.5) return md.slice(m.index);\n  return md;\n}\n\nfunction stripMarkdownNoise(md, { trimH1 = true } = {}) {\n  md = normalizeSetext(md);\n  if (trimH1) md = trimBeforeFirstH1(md);\n  md = md.replace(RE_IMAGE, '').replace(RE_LINK, '$1').replace(RE_CITATION, '');\n  let lines = md.split('\\n').map((l) => l.replace(/\\s+$/, ''))\n    .filter((l) => !RE_BARE_URL_LINE.test(l) && !RE_CHECKBOX_LINE.test(l))\n    .filter((l) => !['-', '*', '+'].includes(l.trim()));\n  // Heading: buang **bold** di dalam heading (\"## **Apa Itu X?**\" -> \"## Apa Itu X?\")\n  lines = lines.map((l) => { const m = l.match(RE_ATX); return m ? `${m[1]} ${cleanHeadingText(m[2])}` : l; });\n  lines = dropMenuLikeLists(lines);\n  return lines.join('\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n}\n\nfunction wordCount(text) {\n  return (String(text).match(/[\\p{L}\\p{N}_]+/gu) || []).length;\n}\n\nfunction truncateMarkdown(md, maxChars) {\n  if (md.length <= maxChars) return [md, false];\n  let cut = md.lastIndexOf('\\n\\n', maxChars);\n  if (cut < maxChars * 0.6) cut = maxChars;\n  return [md.slice(0, cut).trimEnd(), true];\n}\n// ---- akhir utilitas ----\n// Markdown halaman internal: judul WordPress jadi satu-satunya H1, lalu isi konten yang sudah dibersihkan.\nfunction buildPageMarkdown(p) {\n  let body = stripMarkdownNoise(p.markdown || '', { trimH1: false });\n  // Heading H1 di dalam konten diturunkan jadi H2 supaya H1 tetap satu (judul halaman).\n  body = body.replace(/^#\\s+/gm, '## ');\n  return `# ${p.title}\\n\\n${body}`.trim();\n}\n// Satu baris per halaman untuk tabel seo_pages (outline, markdown utuh, jumlah chunk, hash).\nconst counts = {};\nfor (const it of $('✂️ Chunk + contextual header').all()) {\n  counts[it.json.url] = (counts[it.json.url] || 0) + 1;\n}\n\nreturn $('📝 HTML → Markdown').all()\n  .filter((it) => counts[it.json.url])\n  .map((it) => {\n    const p = it.json;\n    const md = buildPageMarkdown(p);\n    return {\n      json: {\n        url: p.url,\n        wp_id: p.wp_id,\n        post_type: p.post_type,\n        title: p.title,\n        meta_description: p.meta_description,\n        outline: formatOutline(extractOutline(md)),\n        markdown: md,\n        word_count: wordCount(md),\n        chunk_count: counts[p.url],\n        content_hash: p.content_hash,\n        modified_gmt: p.modified_gmt,\n      },\n    };\n  });\n"
+      },
+      "id": "fb835320-a4b5-5986-9240-b08970d1606c",
+      "name": "📊 Ringkasan per halaman",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2780,
+        400
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO seo_pages (url, wp_id, post_type, title, meta_description, outline, markdown, word_count, chunk_count, content_hash, modified_gmt, indexed_at)\nVALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, now())\nON CONFLICT (url) DO UPDATE SET wp_id = EXCLUDED.wp_id, post_type = EXCLUDED.post_type, title = EXCLUDED.title,\n  meta_description = EXCLUDED.meta_description, outline = EXCLUDED.outline, markdown = EXCLUDED.markdown,\n  word_count = EXCLUDED.word_count, chunk_count = EXCLUDED.chunk_count, content_hash = EXCLUDED.content_hash,\n  modified_gmt = EXCLUDED.modified_gmt, indexed_at = now();",
+        "options": {
+          "queryReplacement": "={{ [$json.url, $json.wp_id, $json.post_type, $json.title, $json.meta_description, $json.outline, $json.markdown, $json.word_count, $json.chunk_count, $json.content_hash, $json.modified_gmt] }}"
+        }
+      },
+      "id": "15fc7f52-8d18-5262-aadb-314257d78bab",
+      "name": "💾 Simpan seo_pages",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3000,
+        400
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "seoPgCredential1",
+          "name": "Postgres · SEO DB"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Jalankan manual": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jadwal harian 02:00": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Config": {
+      "main": [
+        [
+          {
+            "node": "📋 Indeks lama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📋 Indeks lama": {
+      "main": [
+        [
+          {
+            "node": "🧩 Daftar endpoint REST",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧩 Daftar endpoint REST": {
+      "main": [
+        [
+          {
+            "node": "🌐 Ambil konten WordPress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🌐 Ambil konten WordPress": {
+      "main": [
+        [
+          {
+            "node": "🔍 Cari halaman terhapus",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "🧹 Normalisasi & cek perubahan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔍 Cari halaman terhapus": {
+      "main": [
+        [
+          {
+            "node": "🗑️ Hapus dari knowledge base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧹 Normalisasi & cek perubahan": {
+      "main": [
+        [
+          {
+            "node": "🔁 Per 10 halaman",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔁 Per 10 halaman": {
+      "main": [
+        [
+          {
+            "node": "✅ Selesai: isi knowledge base",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📝 HTML → Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📝 HTML → Markdown": {
+      "main": [
+        [
+          {
+            "node": "✂️ Chunk + contextual header",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "✂️ Chunk + contextual header": {
+      "main": [
+        [
+          {
+            "node": "🧽 Hapus chunk lama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧽 Hapus chunk lama": {
+      "main": [
+        [
+          {
+            "node": "↩️ Teruskan chunk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "↩️ Teruskan chunk": {
+      "main": [
+        [
+          {
+            "node": "🧠 Simpan ke pgvector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧠 Simpan ke pgvector": {
+      "main": [
+        [
+          {
+            "node": "📊 Ringkasan per halaman",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Ringkasan per halaman": {
+      "main": [
+        [
+          {
+            "node": "💾 Simpan seo_pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "💾 Simpan seo_pages": {
+      "main": [
+        [
+          {
+            "node": "🔁 Per 10 halaman",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Ollama (bge-m3)": {
+      "ai_embedding": [
+        [
+          {
+            "node": "🧠 Simpan ke pgvector",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data Loader (teks + metadata)": {
+      "ai_document": [
+        [
+          {
+            "node": "🧠 Simpan ke pgvector",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Splitter pengaman": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Data Loader (teks + metadata)",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false,
+  "pinData": {},
+  "versionId": "03c5285a-86c1-5452-b037-1cf166710f9c",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

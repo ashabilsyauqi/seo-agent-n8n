@@ -1,0 +1,115 @@
+{
+  "id": "seoToolGetPage01",
+  "name": "SEO · Tool · get_internal_page",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📄 Tool: get_internal_page\nMengambil isi utuh + outline satu halaman internal dari tabel `seo_pages` (hasil ingestion). URL dicocokkan tanpa peduli http/https, www, atau garis miring di akhir.",
+        "height": 170,
+        "width": 520
+      },
+      "id": "19e13081-00bd-5aae-a650-558121b7421c",
+      "name": "Catatan",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "url"
+            }
+          ]
+        }
+      },
+      "id": "6678de00-8c61-5aa6-97ac-278c35ffb1ef",
+      "name": "Input dari agent",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT url, title, meta_description, word_count, markdown,\n       to_char(modified_gmt, 'YYYY-MM-DD') AS modified_gmt, to_char(indexed_at, 'YYYY-MM-DD HH24:MI') AS indexed_at\nFROM seo_pages\nWHERE rtrim(regexp_replace(url, '^https?://(www\\.)?', ''), '/')\n    = rtrim(regexp_replace(trim($1), '^https?://(www\\.)?', ''), '/')\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.url || '') ] }}"
+        }
+      },
+      "id": "438827dc-11f5-5a37-a88e-aacb4c55d571",
+      "name": "📄 Ambil halaman",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        220,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "seoPgCredential1",
+          "name": "Postgres · SEO DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- Utilitas Markdown (port dari seo_agent/common/markdown.py) ----\n// Dipakai sama persis untuk konten internal & kompetitor agar outline H1-H3 apple-to-apple.\nconst RE_IMAGE = /!\\[[^\\]]*\\]\\([^)]*\\)/g;\nconst RE_LINK = /\\[([^\\]]*)\\]\\((?:[^()]|\\([^)]*\\))*\\)/g;\nconst RE_CITATION = /\\[\\[?\\d{1,3}\\]?\\]/g;\nconst RE_BARE_URL_LINE = /^\\s*(?:[-*]\\s*)?<?https?:\\/\\/\\S+>?\\s*$/;\nconst RE_CHECKBOX_LINE = /^\\s*[-*]\\s*\\[[ xX]\\]\\s/;\nconst RE_FENCE = /^\\s{0,3}(```|~~~)/;\nconst RE_ATX = /^\\s{0,3}(#{1,6})\\s+(.+?)\\s*#*\\s*$/;\nconst RE_LIST_ITEM = /^\\s*(?:[-*+]|\\d+[.)])\\s+(.*)$/;\n\nfunction decodeEntities(s) {\n  if (!s) return '';\n  const named = { amp: '&', lt: '<', gt: '>', quot: '\"', apos: \"'\", nbsp: ' ', hellip: '…', ndash: '–', mdash: '—', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“' };\n  return String(s)\n    .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(Number(d)))\n    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n    .replace(/&([a-z]+);/gi, (m, n) => (named[n.toLowerCase()] ?? m));\n}\n\nfunction stripTags(html) {\n  return decodeEntities(String(html || '').replace(/<[^>]+>/g, ' ')).replace(/\\s+/g, ' ').trim();\n}\n\nfunction cleanHeadingText(text) {\n  return text.replace(RE_IMAGE, '').replace(RE_LINK, '$1').replace(/[*_`]+/g, '').replace(/\\\\([\\\\`*_{}\\[\\]()#+\\-.!])/g, '$1').replace(/\\s+/g, ' ').trim();\n}\n\nfunction normalizeSetext(md) {\n  const lines = md.split('\\n');\n  const out = [];\n  let inFence = false;\n  for (let i = 0; i < lines.length; i++) {\n    const line = lines[i];\n    if (RE_FENCE.test(line)) inFence = !inFence;\n    const nxt = lines[i + 1];\n    const isText = line.trim() && !/^[#\\-*>|+]/.test(line.trimStart());\n    if (!inFence && nxt !== undefined && isText) {\n      if (/^\\s{0,3}=+\\s*$/.test(nxt)) { out.push('# ' + line.trim()); i++; continue; }\n      if (/^\\s{0,3}-{2,}\\s*$/.test(nxt)) { out.push('## ' + line.trim()); i++; continue; }\n    }\n    out.push(line);\n  }\n  return out.join('\\n');\n}\n\nfunction extractOutline(md, maxLevel = 3) {\n  const outline = [];\n  let inFence = false;\n  for (const line of normalizeSetext(md).split('\\n')) {\n    if (RE_FENCE.test(line)) { inFence = !inFence; continue; }\n    if (inFence) continue;\n    const m = line.match(RE_ATX);\n    if (m) {\n      const level = m[1].length;\n      const text = cleanHeadingText(m[2]);\n      if (level <= maxLevel && text) outline.push([level, text]);\n    }\n  }\n  return outline;\n}\n\nfunction formatOutline(outline, maxItems = 80) {\n  if (!outline.length) return '(tidak ada heading terdeteksi)';\n  const lines = outline.slice(0, maxItems).map(([l, t]) => `${'  '.repeat(l - 1)}H${l}: ${t}`);\n  if (outline.length > maxItems) lines.push(`... (+${outline.length - maxItems} heading lainnya)`);\n  return lines.join('\\n');\n}\n\nfunction dropMenuLikeLists(lines, minRun = 12, maxWords = 4) {\n  const out = [];\n  let run = [];\n  const flush = () => {\n    const shortItems = run.filter((l) => RE_LIST_ITEM.test(l));\n    if (shortItems.length < minRun) out.push(...run);\n    run = [];\n  };\n  for (const line of lines) {\n    const item = line.match(RE_LIST_ITEM);\n    if (item && item[1].split(/\\s+/).filter(Boolean).length <= maxWords) run.push(line);\n    else if (!line.trim() && run.length) run.push(line);\n    else { flush(); out.push(line); }\n  }\n  flush();\n  return out;\n}\n\nfunction trimBeforeFirstH1(md) {\n  const m = md.match(/^\\s{0,3}#\\s+\\S/m);\n  if (m && m.index > 0 && m.index < md.length * 0.5) return md.slice(m.index);\n  return md;\n}\n\nfunction stripMarkdownNoise(md, { trimH1 = true } = {}) {\n  md = normalizeSetext(md);\n  if (trimH1) md = trimBeforeFirstH1(md);\n  md = md.replace(RE_IMAGE, '').replace(RE_LINK, '$1').replace(RE_CITATION, '');\n  let lines = md.split('\\n').map((l) => l.replace(/\\s+$/, ''))\n    .filter((l) => !RE_BARE_URL_LINE.test(l) && !RE_CHECKBOX_LINE.test(l))\n    .filter((l) => !['-', '*', '+'].includes(l.trim()));\n  // Heading: buang **bold** di dalam heading (\"## **Apa Itu X?**\" -> \"## Apa Itu X?\")\n  lines = lines.map((l) => { const m = l.match(RE_ATX); return m ? `${m[1]} ${cleanHeadingText(m[2])}` : l; });\n  lines = dropMenuLikeLists(lines);\n  return lines.join('\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n}\n\nfunction wordCount(text) {\n  return (String(text).match(/[\\p{L}\\p{N}_]+/gu) || []).length;\n}\n\nfunction truncateMarkdown(md, maxChars) {\n  if (md.length <= maxChars) return [md, false];\n  let cut = md.lastIndexOf('\\n\\n', maxChars);\n  if (cut < maxChars * 0.6) cut = maxChars;\n  return [md.slice(0, cut).trimEnd(), true];\n}\n// ---- akhir utilitas ----\n// Format satu halaman internal dengan struktur yang sama seperti [COMPETITOR_PAGE] (apple-to-apple).\nconst url = String($('Input dari agent').first().json.url || '').trim();\nconst row = $input.first().json || {};\n\nif (!row.url) {\n  return [{ json: { result: `ERROR: ${url} tidak ditemukan di knowledge base. Pastikan URL milik ${$env.SITE_DOMAIN} dan sudah di-index (jalankan workflow Ingestion), atau cari dulu dengan search_internal_content.` } }];\n}\n\nconst md = row.markdown || '';\nconst outline = extractOutline(md);\nconst counts = { 1: 0, 2: 0, 3: 0 };\nfor (const [level] of outline) counts[level] += 1;\nconst [body, truncated] = truncateMarkdown(md, Number($env.SCRAPE_MAX_CHARS || 12000));\n\nreturn [{ json: { result: [\n  '[INTERNAL_PAGE]',\n  `URL: ${row.url}`,\n  `Title: ${row.title || '-'}`,\n  `Meta description (excerpt): ${row.meta_description || '-'}`,\n  `Word count: ${row.word_count ?? '-'}`,\n  `Headings: H1=${counts[1]}, H2=${counts[2]}, H3=${counts[3]}`,\n  `Terakhir diubah: ${row.modified_gmt || '-'} | di-index: ${row.indexed_at || '-'}`,\n  '',\n  'OUTLINE:',\n  formatOutline(outline),\n  '',\n  `CONTENT (Markdown${truncated ? `, dipotong ke ${body.length} dari ${md.length} karakter` : ''}):`,\n  body,\n  '[/INTERNAL_PAGE]',\n].join('\\n') } }];\n"
+      },
+      "id": "893a14c3-b7ee-5973-a918-181200f378f2",
+      "name": "🧾 Format INTERNAL_PAGE",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Input dari agent": {
+      "main": [
+        [
+          {
+            "node": "📄 Ambil halaman",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📄 Ambil halaman": {
+      "main": [
+        [
+          {
+            "node": "🧾 Format INTERNAL_PAGE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false,
+  "pinData": {},
+  "versionId": "27167d33-3fa6-509f-b159-19d8eafb4a75",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

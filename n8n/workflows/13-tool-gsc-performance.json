@@ -1,0 +1,142 @@
+{
+  "id": "seoToolGSC001",
+  "name": "SEO · Tool · gsc_search_performance",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📊 Tool: gsc_search_performance\nMembaca data nyata Google Search Console untuk website yang dikelola.\nMendukung mode:\n- `top_queries`: Kata kunci teratas (klik/impresi)\n- `top_pages`: Halaman teratas\n- `striking_distance`: Posisi 8-20 dengan impresi tinggi (peluang quick-win)\n- `low_ctr`: Halaman top 10 tapi CTR rendah (kandidat rewrite title/meta)",
+        "height": 220,
+        "width": 560
+      },
+      "id": "c13824bc-5d31-5079-a719-74d32a90fa72",
+      "name": "Catatan",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "site",
+              "displayName": "site",
+              "type": "string"
+            },
+            {
+              "name": "report",
+              "displayName": "report",
+              "type": "string"
+            },
+            {
+              "name": "days",
+              "displayName": "days",
+              "type": "number"
+            },
+            {
+              "name": "page_url",
+              "displayName": "page_url",
+              "type": "string"
+            },
+            {
+              "name": "query_contains",
+              "displayName": "query_contains",
+              "type": "string"
+            },
+            {
+              "name": "limit",
+              "displayName": "limit",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "id": "f51950a2-2ab7-512c-9cb3-911855a8f230",
+      "name": "Input dari agent",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT slug, name, domain, wp_base_url, gsc_property\nFROM seo_sites\nWHERE (slug = lower(trim($1)) OR domain = lower(trim($1)))\n   OR ($1 = '' AND slug = 'difitech')\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.site || '').trim() ] }}"
+        }
+      },
+      "id": "8488e1bc-2051-578b-962a-19128f7ca519",
+      "name": "Cari website di DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        220,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "seoPgCredential1",
+          "name": "Postgres · SEO DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const fs = require('fs');\nconst crypto = require('crypto');\n\nconst input = $('Input dari agent').first().json || {};\nconst siteRow = $input.first()?.json || {};\n\nif (!siteRow.slug && !siteRow.domain) {\n  return [{ json: { result: `ERROR: Website '${input.site || ''}' tidak ditemukan di database seo_sites. Panggil tool list_managed_sites untuk melihat daftar website yang tersedia.` } }];\n}\n\nconst siteName = siteRow.name || 'Website';\nconst domain = siteRow.domain || '';\nconst gscProp = siteRow.gsc_property || `sc-domain:${domain}`;\nconst report = String(input.report || 'top_queries').toLowerCase();\nconst days = Math.min(Math.max(Number(input.days) || 28, 7), 480);\nconst limit = Math.min(Math.max(Number(input.limit) || 20, 1), 50);\nconst pageUrl = String(input.page_url || '').trim();\nconst queryFilter = String(input.query_contains || '').trim();\n\nconst credPath = '/credentials/gsc-service-account.json';\nlet sa = null;\ntry {\n  if (fs.existsSync(credPath)) {\n    sa = JSON.parse(fs.readFileSync(credPath, 'utf8'));\n  } else if (process.env.GSC_SERVICE_ACCOUNT_JSON) {\n    sa = JSON.parse(process.env.GSC_SERVICE_ACCOUNT_JSON);\n  }\n} catch (e) {\n  return [{ json: { result: `ERROR: Gagal membaca file Service Account: ${e.message}` } }];\n}\n\nif (!sa || !sa.client_email || !sa.private_key) {\n  return [{ json: { result: [\n    '[GSC_NOT_CONFIGURED]',\n    `Website: ${siteName} (${domain})`,\n    `Target GSC Property: ${gscProp}`,\n    'Status: File Service Account belum ditemukan di credentials/gsc-service-account.json.',\n    '',\n    'Panduan Menghubungkan Google Search Console:',\n    '1. Buka Google Cloud Console -> Aktifkan Google Search Console API.',\n    '2. Buat Service Account (IAM & Admin -> Service Accounts), lalu buat Key (format JSON).',\n    '3. Simpan file tersebut ke folder: credentials/gsc-service-account.json',\n    `4. Di Google Search Console property (${gscProp}): Settings -> Users & permissions -> Tambahkan email Service Account dengan izin \"Restricted\".`,\n    '5. Setelah itu, panggil kembali perintah ini.',\n    '[/GSC_NOT_CONFIGURED]'\n  ].join('\\n') } }];\n}\n\nconst DATA_LAG_DAYS = 3;\nconst endD = new Date(Date.now() - DATA_LAG_DAYS * 86400000);\nconst startD = new Date(endD.getTime() - (days - 1) * 86400000);\nconst endStr = endD.toISOString().slice(0, 10);\nconst startStr = startD.toISOString().slice(0, 10);\n\nconst nowSec = Math.floor(Date.now() / 1000);\nconst header = { alg: 'RS256', typ: 'JWT' };\nconst claim = {\n  iss: sa.client_email,\n  scope: 'https://www.googleapis.com/auth/webmasters.readonly',\n  aud: 'https://oauth2.googleapis.com/token',\n  exp: nowSec + 3600,\n  iat: nowSec\n};\nconst b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');\nconst unsignedToken = `${b64(header)}.${b64(claim)}`;\nconst signer = crypto.createSign('RSA-SHA256');\nsigner.update(unsignedToken);\nconst sig = signer.sign(sa.private_key, 'base64url');\nconst jwtAssertion = `${unsignedToken}.${sig}`;\n\nconst tokenResp = await fetch('https://oauth2.googleapis.com/token', {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },\n  body: new URLSearchParams({\n    grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',\n    assertion: jwtAssertion\n  })\n});\n\nif (!tokenResp.ok) {\n  const errBody = await tokenResp.text();\n  return [{ json: { result: `ERROR: Gagal otorisasi Google OAuth (HTTP ${tokenResp.status}): ${errBody}` } }];\n}\nconst tokenData = await tokenResp.json();\nconst accessToken = tokenData.access_token;\n\nlet dimensions = ['query'];\nif (report === 'top_pages') dimensions = ['page'];\nelse if (report === 'striking_distance') dimensions = ['query', 'page'];\nelse if (report === 'low_ctr') dimensions = ['page'];\n\nconst filters = [];\nif (pageUrl) filters.push({ dimension: 'page', operator: 'equals', expression: pageUrl });\nif (queryFilter) filters.push({ dimension: 'query', operator: 'contains', expression: queryFilter });\n\nconst requestBody = {\n  startDate: startStr,\n  endDate: endStr,\n  dimensions,\n  rowLimit: report === 'striking_distance' ? 2000 : (report === 'low_ctr' ? 1000 : limit),\n  type: 'web'\n};\nif (filters.length > 0) requestBody.dimensionFilterGroups = [{ filters }];\n\nconst gscUrl = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(gscProp)}/searchAnalytics/query`;\nconst gscResp = await fetch(gscUrl, {\n  method: 'POST',\n  headers: {\n    'Authorization': `Bearer ${accessToken}`,\n    'Content-Type': 'application/json'\n  },\n  body: JSON.stringify(requestBody)\n});\n\nif (!gscResp.ok) {\n  const errBody = await gscResp.text();\n  if (gscResp.status === 403) {\n    return [{ json: { result: `[GSC_ACCESS_DENIED]\\nAkses ditolak untuk property: ${gscProp}.\\nPastikan email Service Account (${sa.client_email}) sudah ditambahkan sebagai user di Google Search Console untuk property tersebut dengan izin Restricted.\\n[/GSC_ACCESS_DENIED]` } }];\n  }\n  return [{ json: { result: `ERROR: Google Search Console API error (HTTP ${gscResp.status}): ${errBody}` } }];\n}\n\nconst gscData = await gscResp.json();\nconst rows = gscData.rows || [];\n\nconst EXPECTED_CTR = { 1: 0.28, 2: 0.15, 3: 0.10, 4: 0.07, 5: 0.05, 6: 0.04, 7: 0.03, 8: 0.025, 9: 0.02, 10: 0.018 };\nconst fmtRow = (r) => `klik: ${Math.round(r.clicks)} | impresi: ${Math.round(r.impressions)} | CTR: ${(r.ctr * 100).toFixed(1)}% | pos: ${r.position.toFixed(1)}`;\n\nlet outputLines = [];\nlet headerText = `[GSC_${report.toUpperCase()}] Property: ${gscProp} | ${startStr} s/d ${endStr} (${days} hari)`;\n\nif (report === 'striking_distance') {\n  headerText += ' | Filter: Posisi 8.0 - 20.0, Impresi >= 20 (Peluang Quick-Win Halaman 1)';\n  const candidates = rows\n    .filter(r => r.position >= 8.0 && r.position <= 20.0 && r.impressions >= 20)\n    .sort((a, b) => b.impressions - a.impressions)\n    .slice(0, limit);\n  outputLines = candidates.map((r, i) => `${i + 1}. \"${r.keys[0]}\" -> ${r.keys[1]} | ${fmtRow(r)}`);\n} else if (report === 'low_ctr') {\n  headerText += ' | Filter: Top 10 Google tapi CTR di bawah standar industri (Kandidat Rewrite Title/Meta)';\n  const candidates = [];\n  for (const r of rows) {\n    const posFloor = Math.round(r.position);\n    if (posFloor >= 1 && posFloor <= 10 && r.impressions >= 50) {\n      const expected = EXPECTED_CTR[posFloor] || 0.02;\n      if (r.ctr < expected * 0.60) {\n        candidates.push({ r, expected });\n      }\n    }\n  }\n  candidates.sort((a, b) => b.r.impressions - a.r.impressions);\n  outputLines = candidates.slice(0, limit).map((c, i) => `${i + 1}. ${c.r.keys[0]} | ${fmtRow(c.r)} | Benchmark CTR Posisi ${Math.round(c.r.position)} ~${(c.expected * 100).toFixed(1)}%`);\n} else if (report === 'top_pages') {\n  outputLines = rows.slice(0, limit).map((r, i) => `${i + 1}. ${r.keys[0]} | ${fmtRow(r)}`);\n} else {\n  outputLines = rows.slice(0, limit).map((r, i) => `${i + 1}. \"${r.keys[0]}\" | ${fmtRow(r)}`);\n}\n\nif (!outputLines.length) {\n  return [{ json: { result: `${headerText}\\nNO_DATA: Tidak ada data yang cocok untuk kriteria ini pada periode ${days} hari terakhir.` } }];\n}\n\nreturn [{ json: { result: `${headerText}\\n${outputLines.join('\\n')}\\n[/GSC_${report.toUpperCase()}]` } }];\n"
+      },
+      "id": "e229bfda-6302-53b6-9812-3841ae650891",
+      "name": "🧾 Eksekusi Analitik GSC",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Input dari agent": {
+      "main": [
+        [
+          {
+            "node": "Cari website di DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cari website di DB": {
+      "main": [
+        [
+          {
+            "node": "🧾 Eksekusi Analitik GSC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false,
+  "pinData": {},
+  "versionId": "b18203ad-13f5-502a-9ca8-410a08e17812",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "id": "seoToolSites001",
+  "name": "SEO · Tool · list_managed_sites",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🌐 Tool: list_managed_sites\nMelihat daftar seluruh website WordPress yang sedang dikelola dan status index/GSC-nya.",
+        "height": 170,
+        "width": 520
+      },
+      "id": "27d6e421-4f32-5a33-b1d8-a1518388ff91",
+      "name": "Catatan",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "action",
+              "displayName": "action",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "31a78ff9-b541-5df0-94b2-0199419266ad",
+      "name": "Input dari agent",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT s.slug, s.name, s.domain, s.wp_base_url, s.gsc_property, s.is_active,\n       COUNT(p.url)::int AS indexed_pages,\n       to_char(MAX(p.indexed_at), 'YYYY-MM-DD HH24:MI') AS last_indexed\nFROM seo_sites s\nLEFT JOIN seo_pages p ON p.site_slug = s.slug\nGROUP BY s.slug, s.name, s.domain, s.wp_base_url, s.gsc_property, s.is_active\nORDER BY s.created_at ASC;",
+        "options": {}
+      },
+      "id": "782012ba-3129-5dcb-81f1-098acb41517a",
+      "name": "Query seo_sites & pages",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        220,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "seoPgCredential1",
+          "name": "Postgres · SEO DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const fs = require('fs');\nconst rows = $input.all().map(i => i.json).filter(r => r && r.slug);\n\nlet hasGscFile = false;\ntry {\n  if (fs.existsSync('/credentials/gsc-service-account.json')) {\n    const sa = JSON.parse(fs.readFileSync('/credentials/gsc-service-account.json', 'utf8'));\n    if (sa.client_email && sa.private_key) hasGscFile = true;\n  }\n} catch (e) {}\n\nif (!rows.length) {\n  return [{ json: { result: '[MANAGED_SITES]\\nBelum ada website yang terdaftar di database seo_sites.\\n[/MANAGED_SITES]' } }];\n}\n\nconst lines = [\n  '[MANAGED_SITES]',\n  `Total website terdaftar: ${rows.length}`,\n  `Status Google Service Account: ${hasGscFile ? '✅ Terpasang di credentials/gsc-service-account.json' : '⚠️ Belum ada file credentials/gsc-service-account.json'}`,\n  ''\n];\n\nrows.forEach((s, idx) => {\n  lines.push(`--- Website #${idx + 1} ---`);\n  lines.push(`Nama: ${s.name}`);\n  lines.push(`Slug (ID): ${s.slug}`);\n  lines.push(`Domain: ${s.domain}`);\n  lines.push(`WordPress URL: ${s.wp_base_url}`);\n  lines.push(`GSC Property: ${s.gsc_property || '(belum disetel)'}`);\n  lines.push(`Konten terindeks di DB: ${s.indexed_pages || 0} halaman${s.last_indexed ? ` (terakhir: ${s.last_indexed})` : ' (belum pernah di-ingest)'}`);\n  lines.push('');\n});\n\nlines.push('Catatan: Untuk menganalisis website tertentu, sebutkan nama website atau domainnya di chat.');\nlines.push('[/MANAGED_SITES]');\n\nreturn [{ json: { result: lines.join('\\n') } }];\n"
+      },
+      "id": "872412ac-bf51-5dc9-a764-a90184bba012",
+      "name": "🧾 Format MANAGED_SITES",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Input dari agent": {
+      "main": [
+        [
+          {
+            "node": "Query seo_sites & pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query seo_sites & pages": {
+      "main": [
+        [
+          {
+            "node": "🧾 Format MANAGED_SITES",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false,
+  "pinData": {},
+  "versionId": "f78423ab-e8b9-4dc5-8f6a-019b841a1209",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

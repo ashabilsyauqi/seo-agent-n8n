@@ -1,0 +1,548 @@
+{
+  "id": "seoToolScrape001",
+  "name": "SEO · Tool · scrape_competitor_url",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🕵️ Tool: scrape_competitor_url\nDipanggil oleh AI Agent. **Jina Reader** (gratis) → bila gagal & `FIRECRAWL_API_KEY` diisi → **Firecrawl**. Hasil di-cache di tabel `scrape_cache` (default 6 jam) supaya pertanyaan lanjutan tidak scrape ulang.\n\nUji sendiri: klik **Execute workflow** lalu isi `url`.",
+        "height": 200,
+        "width": 520
+      },
+      "id": "63d73c9e-956b-5579-990b-5066a1a8f57b",
+      "name": "Catatan",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "url"
+            }
+          ]
+        }
+      },
+      "id": "88d509a3-54f9-5536-b644-8c6b00e08db0",
+      "name": "Input dari agent",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Validasi URL kompetitor: hanya http(s), tolak localhost/IP privat, arahkan URL milik sendiri ke knowledge base.\nconst raw = String($input.first().json.url || '').trim().replace(/^[<\"'\\s]+|[>\"'\\s.,;]+$/g, '');\nconst site = String($env.SITE_DOMAIN || '').toLowerCase().replace(/^www\\./, '');\n\nfunction isBlockedHost(host) {\n  if (['localhost', '0.0.0.0', '::', '::1'].includes(host)) return true;\n  if (/\\.(local|internal|localhost|lan|home)$/.test(host)) return true;\n  if (!host.includes('.') && !host.includes(':')) return true; // nama host tanpa domain (mis. \"postgres\")\n  const v4 = host.match(/^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$/);\n  if (v4) {\n    const [a, b] = [Number(v4[1]), Number(v4[2])];\n    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)\n      || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;\n  }\n  if (host.includes(':')) return /^(fc|fd|fe80)/i.test(host); // IPv6 privat / link-local\n  return false;\n}\n\n// Catatan: sandbox Code node n8n tidak menyediakan class URL, jadi URL di-parse dengan regex.\nconst m = raw.match(/^(https?):\\/\\/(\\[[^\\]]+\\]|[^\\/?#:@\\s]+)(?::(\\d{1,5}))?([\\/?#][^\\s]*)?$/i);\nlet result;\nif (!m) {\n  result = { url: raw, ok: false, error: `ERROR: URL tidak valid: \"${raw}\". Gunakan URL lengkap diawali http(s)://` };\n} else {\n  const host = m[2].toLowerCase().replace(/^\\[|\\]$/g, '');\n  const url = `${m[1].toLowerCase()}://${m[2].toLowerCase()}${m[3] ? `:${m[3]}` : ''}${(m[4] || '/').split('#')[0]}`;\n  if (isBlockedHost(host)) {\n    result = { url, ok: false, error: 'ERROR: URL lokal/private network tidak diizinkan untuk scraping kompetitor.' };\n  } else if (site && (host === site || host.endsWith(`.${site}`))) {\n    result = { url, ok: false, error: `OWN_SITE: ${url} adalah halaman milik ${site}, bukan kompetitor. Gunakan get_internal_page(url) untuk membaca isinya dari knowledge base.` };\n  } else {\n    result = { url, ok: true, error: '' };\n  }\n}\nreturn [{ json: result }];\n"
+      },
+      "id": "f5b5060a-14f2-5144-a55b-dc5919ed0a7c",
+      "name": "🔎 Validasi URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "bb8dd4ac-b0ca-5aa3-b23a-045fd95509a2",
+              "leftValue": "={{ $json.ok }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "002b5c92-c3de-52e7-8a52-170baa65b18a",
+      "name": "URL valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "720e8ce6-067d-5f43-98ca-852d3aaa482a",
+              "name": "result",
+              "value": "={{ $json.error }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "38234bae-eb3e-5cd4-b173-5081decaa87f",
+      "name": "⛔ Kembalikan pesan",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        660,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT result FROM scrape_cache WHERE url = $1 AND fetched_at > now() - make_interval(hours => $2::int);",
+        "options": {
+          "queryReplacement": "={{ [$json.url, Number($env.SCRAPE_CACHE_HOURS || 6)] }}"
+        }
+      },
+      "id": "b2c18739-9079-598b-ae24-6d64af4082f0",
+      "name": "🗄️ Cek cache",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        100
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "seoPgCredential1",
+          "name": "Postgres · SEO DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b848cc74-228e-5109-9d4d-af8f64f1da22",
+              "leftValue": "={{ $json.result }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "a27e90b5-4793-566a-b723-34783ff56bb4",
+      "name": "Ada di cache?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3486c9c2-a919-5cb5-ad02-01ae15328467",
+              "name": "result",
+              "value": "={{ $json.result + '\\n(dari cache)' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "06f6c17d-f098-53d4-8d62-2925535ae669",
+      "name": "♻️ Hasil dari cache",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1100,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://r.jina.ai/{{ $('🔎 Validasi URL').first().json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign({\n  'Accept': 'application/json',\n  'X-Return-Format': 'markdown',\n  'X-Retain-Images': 'none',\n  'X-Timeout': '45',\n  'X-Remove-Selector': 'nav, footer, aside, form, .sidebar, .menu, .breadcrumb, .related, .comments, #toc, .toc'\n}, $env.JINA_API_KEY ? { Authorization: 'Bearer ' + $env.JINA_API_KEY } : {})) }}",
+        "options": {
+          "timeout": 70000
+        }
+      },
+      "id": "5576e257-e00b-5312-a492-59cd1c0189cb",
+      "name": "🌐 Jina Reader",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        160
+      ],
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0b108ba7-0b9b-5afb-ab2c-9b48a2112661",
+              "leftValue": "={{ $env.FIRECRAWL_API_KEY }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "b218b93c-9b30-5bac-8a10-12591293a78a",
+      "name": "Firecrawl tersedia?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v2/scrape",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.FIRECRAWL_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $('🔎 Validasi URL').first().json.url, formats: ['markdown'], onlyMainContent: true, timeout: 45000 }) }}",
+        "options": {
+          "timeout": 70000
+        }
+      },
+      "id": "097a5140-d581-5109-a45a-5d08cd3065b6",
+      "name": "🔥 Firecrawl",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        300
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- Utilitas Markdown (port dari seo_agent/common/markdown.py) ----\n// Dipakai sama persis untuk konten internal & kompetitor agar outline H1-H3 apple-to-apple.\nconst RE_IMAGE = /!\\[[^\\]]*\\]\\([^)]*\\)/g;\nconst RE_LINK = /\\[([^\\]]*)\\]\\((?:[^()]|\\([^)]*\\))*\\)/g;\nconst RE_CITATION = /\\[\\[?\\d{1,3}\\]?\\]/g;\nconst RE_BARE_URL_LINE = /^\\s*(?:[-*]\\s*)?<?https?:\\/\\/\\S+>?\\s*$/;\nconst RE_CHECKBOX_LINE = /^\\s*[-*]\\s*\\[[ xX]\\]\\s/;\nconst RE_FENCE = /^\\s{0,3}(```|~~~)/;\nconst RE_ATX = /^\\s{0,3}(#{1,6})\\s+(.+?)\\s*#*\\s*$/;\nconst RE_LIST_ITEM = /^\\s*(?:[-*+]|\\d+[.)])\\s+(.*)$/;\n\nfunction decodeEntities(s) {\n  if (!s) return '';\n  const named = { amp: '&', lt: '<', gt: '>', quot: '\"', apos: \"'\", nbsp: ' ', hellip: '…', ndash: '–', mdash: '—', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“' };\n  return String(s)\n    .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(Number(d)))\n    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n    .replace(/&([a-z]+);/gi, (m, n) => (named[n.toLowerCase()] ?? m));\n}\n\nfunction stripTags(html) {\n  return decodeEntities(String(html || '').replace(/<[^>]+>/g, ' ')).replace(/\\s+/g, ' ').trim();\n}\n\nfunction cleanHeadingText(text) {\n  return text.replace(RE_IMAGE, '').replace(RE_LINK, '$1').replace(/[*_`]+/g, '').replace(/\\\\([\\\\`*_{}\\[\\]()#+\\-.!])/g, '$1').replace(/\\s+/g, ' ').trim();\n}\n\nfunction normalizeSetext(md) {\n  const lines = md.split('\\n');\n  const out = [];\n  let inFence = false;\n  for (let i = 0; i < lines.length; i++) {\n    const line = lines[i];\n    if (RE_FENCE.test(line)) inFence = !inFence;\n    const nxt = lines[i + 1];\n    const isText = line.trim() && !/^[#\\-*>|+]/.test(line.trimStart());\n    if (!inFence && nxt !== undefined && isText) {\n      if (/^\\s{0,3}=+\\s*$/.test(nxt)) { out.push('# ' + line.trim()); i++; continue; }\n      if (/^\\s{0,3}-{2,}\\s*$/.test(nxt)) { out.push('## ' + line.trim()); i++; continue; }\n    }\n    out.push(line);\n  }\n  return out.join('\\n');\n}\n\nfunction extractOutline(md, maxLevel = 3) {\n  const outline = [];\n  let inFence = false;\n  for (const line of normalizeSetext(md).split('\\n')) {\n    if (RE_FENCE.test(line)) { inFence = !inFence; continue; }\n    if (inFence) continue;\n    const m = line.match(RE_ATX);\n    if (m) {\n      const level = m[1].length;\n      const text = cleanHeadingText(m[2]);\n      if (level <= maxLevel && text) outline.push([level, text]);\n    }\n  }\n  return outline;\n}\n\nfunction formatOutline(outline, maxItems = 80) {\n  if (!outline.length) return '(tidak ada heading terdeteksi)';\n  const lines = outline.slice(0, maxItems).map(([l, t]) => `${'  '.repeat(l - 1)}H${l}: ${t}`);\n  if (outline.length > maxItems) lines.push(`... (+${outline.length - maxItems} heading lainnya)`);\n  return lines.join('\\n');\n}\n\nfunction dropMenuLikeLists(lines, minRun = 12, maxWords = 4) {\n  const out = [];\n  let run = [];\n  const flush = () => {\n    const shortItems = run.filter((l) => RE_LIST_ITEM.test(l));\n    if (shortItems.length < minRun) out.push(...run);\n    run = [];\n  };\n  for (const line of lines) {\n    const item = line.match(RE_LIST_ITEM);\n    if (item && item[1].split(/\\s+/).filter(Boolean).length <= maxWords) run.push(line);\n    else if (!line.trim() && run.length) run.push(line);\n    else { flush(); out.push(line); }\n  }\n  flush();\n  return out;\n}\n\nfunction trimBeforeFirstH1(md) {\n  const m = md.match(/^\\s{0,3}#\\s+\\S/m);\n  if (m && m.index > 0 && m.index < md.length * 0.5) return md.slice(m.index);\n  return md;\n}\n\nfunction stripMarkdownNoise(md, { trimH1 = true } = {}) {\n  md = normalizeSetext(md);\n  if (trimH1) md = trimBeforeFirstH1(md);\n  md = md.replace(RE_IMAGE, '').replace(RE_LINK, '$1').replace(RE_CITATION, '');\n  let lines = md.split('\\n').map((l) => l.replace(/\\s+$/, ''))\n    .filter((l) => !RE_BARE_URL_LINE.test(l) && !RE_CHECKBOX_LINE.test(l))\n    .filter((l) => !['-', '*', '+'].includes(l.trim()));\n  // Heading: buang **bold** di dalam heading (\"## **Apa Itu X?**\" -> \"## Apa Itu X?\")\n  lines = lines.map((l) => { const m = l.match(RE_ATX); return m ? `${m[1]} ${cleanHeadingText(m[2])}` : l; });\n  lines = dropMenuLikeLists(lines);\n  return lines.join('\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n}\n\nfunction wordCount(text) {\n  return (String(text).match(/[\\p{L}\\p{N}_]+/gu) || []).length;\n}\n\nfunction truncateMarkdown(md, maxChars) {\n  if (md.length <= maxChars) return [md, false];\n  let cut = md.lastIndexOf('\\n\\n', maxChars);\n  if (cut < maxChars * 0.6) cut = maxChars;\n  return [md.slice(0, cut).trimEnd(), true];\n}\n// ---- akhir utilitas ----\n// Ubah respons Jina Reader / Firecrawl jadi teks terstruktur [COMPETITOR_PAGE] (outline + konten bersih).\nconst v = $('🔎 Validasi URL').first().json;\nconst j = $input.first().json || {};\n\nlet md = '', title = '', desc = '', provider = '', error = '';\nif (j.error) {\n  error = typeof j.error === 'string' ? j.error : (j.error.message || JSON.stringify(j.error));\n} else if (j.data && typeof j.data === 'object' && 'content' in j.data) { // Jina Reader (Accept: application/json)\n  provider = 'jina';\n  md = j.data.content || '';\n  title = j.data.title || '';\n  desc = j.data.description || '';\n} else if (j.data && typeof j.data === 'object' && 'markdown' in j.data) { // Firecrawl v2\n  provider = 'firecrawl';\n  md = j.data.markdown || '';\n  const meta = j.data.metadata || {};\n  title = meta.title || meta.ogTitle || '';\n  desc = meta.description || meta.ogDescription || '';\n} else if (typeof j.data === 'string') { // respons teks polos\n  provider = 'jina';\n  md = j.data;\n}\n\nif (error || !md.trim()) {\n  return [{ json: { url: v.url, cache: false, result: `ERROR: Gagal scrape ${v.url}: ${error || 'konten kosong (situs berat JavaScript/anti-bot?)'}. Isi FIRECRAWL_API_KEY atau JINA_API_KEY di .env, atau minta user mengirim URL lain.` } }];\n}\n\n// Banyak tema menulis judul artikel sebagai H2/H3 (atau teks biasa). Jika tidak ada H1, jadikan baris\n// yang sama dengan judul halaman sebagai H1, supaya menu/header sebelum judul ikut terbuang.\nfunction normText(x) { return String(x).toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, ' ').trim(); }\nfunction promoteTitle(text, pageTitle) {\n  text = normalizeSetext(text);\n  if (/^\\s{0,3}#\\s+\\S/m.test(text)) return text;\n  const t = normText(String(pageTitle).split(/\\s[-|–—]\\s/)[0]).slice(0, 50);\n  if (t.length < 8) return text;\n  const lines = text.split('\\n');\n  for (let i = 0; i < lines.length; i++) {\n    const h = lines[i].match(RE_ATX);\n    const candidate = h ? cleanHeadingText(h[2]) : lines[i].trim();\n    if (candidate.length < 200 && normText(candidate).startsWith(t)) {\n      lines[i] = `# ${candidate}`;\n      return lines.join('\\n');\n    }\n  }\n  return text;\n}\n// Buang ekor halaman (Recent Posts, Related, komentar) bila muncul di 40% akhir dokumen.\nfunction trimTail(text) {\n  const re = /^#{1,6}\\s+(recent posts|related posts?|artikel terkait|artikel lainnya|baca juga|you may also like|leave a (reply|comment)|tinggalkan (balasan|komentar)|komentar|comments?)\\b.*$/gim;\n  let m;\n  while ((m = re.exec(text))) {\n    if (m.index > text.length * 0.6) return text.slice(0, m.index).trimEnd();\n  }\n  return text;\n}\n\nconst cleaned = trimTail(stripMarkdownNoise(promoteTitle(md, title)));\nconst outline = extractOutline(cleaned);\nconst counts = { 1: 0, 2: 0, 3: 0 };\nfor (const [level] of outline) counts[level] += 1;\nconst [body, truncated] = truncateMarkdown(cleaned, Number($env.SCRAPE_MAX_CHARS || 12000));\n\nconst result = [\n  '[COMPETITOR_PAGE]',\n  `URL: ${v.url}`,\n  `Scraper: ${provider}`,\n  `Title: ${title || '-'}`,\n  `Meta description: ${desc || '-'}`,\n  `Word count: ${wordCount(cleaned)}`,\n  `Headings: H1=${counts[1]}, H2=${counts[2]}, H3=${counts[3]}`,\n  '',\n  'OUTLINE:',\n  formatOutline(outline),\n  '',\n  `CONTENT (Markdown${truncated ? `, dipotong ke ${body.length} dari ${cleaned.length} karakter` : ''}):`,\n  body,\n  '[/COMPETITOR_PAGE]',\n].join('\\n');\n\nreturn [{ json: { url: v.url, provider, cache: true, result } }];\n"
+      },
+      "id": "b6128631-38c4-5991-895d-8941d9f8ecab",
+      "name": "🧾 Format COMPETITOR_PAGE",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9f59e575-20a1-57c0-8520-f5f1b72656cc",
+              "leftValue": "={{ $json.cache }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "79088962-1ee1-5b25-9c60-5b4d5b20d38e",
+      "name": "Simpan ke cache?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO scrape_cache (url, provider, result, fetched_at) VALUES ($1, $2, $3, now())\nON CONFLICT (url) DO UPDATE SET provider = EXCLUDED.provider, result = EXCLUDED.result, fetched_at = now();",
+        "options": {
+          "queryReplacement": "={{ [$json.url, $json.provider, $json.result] }}"
+        }
+      },
+      "id": "2bfb67dd-e22e-5ecf-aa82-2c2d1b6ffd61",
+      "name": "💾 Simpan cache",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2200,
+        60
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "seoPgCredential1",
+          "name": "Postgres · SEO DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "479f213f-4ea4-57b9-85e7-e36c76b2dd87",
+              "name": "result",
+              "value": "={{ $('🧾 Format COMPETITOR_PAGE').first().json.result }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ab4532e7-f3d0-5519-b779-f3c6e901a09d",
+      "name": "✅ Hasil",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2420,
+        160
+      ]
+    }
+  ],
+  "connections": {
+    "Input dari agent": {
+      "main": [
+        [
+          {
+            "node": "🔎 Validasi URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔎 Validasi URL": {
+      "main": [
+        [
+          {
+            "node": "URL valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL valid?": {
+      "main": [
+        [
+          {
+            "node": "🗄️ Cek cache",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "⛔ Kembalikan pesan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🗄️ Cek cache": {
+      "main": [
+        [
+          {
+            "node": "Ada di cache?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ada di cache?": {
+      "main": [
+        [
+          {
+            "node": "♻️ Hasil dari cache",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "🌐 Jina Reader",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🌐 Jina Reader": {
+      "main": [
+        [
+          {
+            "node": "🧾 Format COMPETITOR_PAGE",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Firecrawl tersedia?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firecrawl tersedia?": {
+      "main": [
+        [
+          {
+            "node": "🔥 Firecrawl",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "🧾 Format COMPETITOR_PAGE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔥 Firecrawl": {
+      "main": [
+        [
+          {
+            "node": "🧾 Format COMPETITOR_PAGE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧾 Format COMPETITOR_PAGE": {
+      "main": [
+        [
+          {
+            "node": "Simpan ke cache?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simpan ke cache?": {
+      "main": [
+        [
+          {
+            "node": "💾 Simpan cache",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "✅ Hasil",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "💾 Simpan cache": {
+      "main": [
+        [
+          {
+            "node": "✅ Hasil",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false,
+  "pinData": {},
+  "versionId": "6a568bf0-6e55-5bba-a7be-3aa6f6919a58",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

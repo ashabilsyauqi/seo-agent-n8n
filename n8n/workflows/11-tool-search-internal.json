@@ -1,0 +1,157 @@
+{
+  "id": "seoToolSearch001",
+  "name": "SEO · Tool · search_internal_content",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🔍 Tool: search_internal_content\nQuery di-embed dengan **bge-m3**, lalu dicari dengan **cosine similarity** di pgvector. Mendukung filter website via parameter `site` (slug/domain).",
+        "height": 200,
+        "width": 560
+      },
+      "id": "81f1a3a9-fac4-51b6-a8f5-a2904caf3a63",
+      "name": "Catatan",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "query"
+            },
+            {
+              "name": "top_k",
+              "type": "number"
+            },
+            {
+              "name": "site",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "1495a1af-2fa7-5642-a22b-e05e9f6cbff8",
+      "name": "Input dari agent",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OLLAMA_URL || 'http://ollama:11434' }}/api/embed",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.EMBEDDING_MODEL || 'bge-m3', input: String($json.query || '') }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "25a1dda6-e3f7-52c1-a9ba-89639dc00495",
+      "name": "🧮 Embed query (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.text,\n       c.metadata->>'url'     AS url,\n       c.metadata->>'title'   AS title,\n       c.metadata->>'section' AS section,\n       1 - (c.embedding <=> $1::vector) AS score,\n       p.outline, p.word_count\nFROM seo_chunks c\nLEFT JOIN seo_pages p ON p.url = c.metadata->>'url'\nWHERE ($3 = '' OR c.site_slug = $3 OR c.metadata->>'url' ILIKE '%' || $3 || '%')\nORDER BY c.embedding <=> $1::vector\nLIMIT $2::int;",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.embeddings[0]), Number($env.RAG_FETCH_K || 20), String($('Input dari agent').first().json.site || '').toLowerCase().trim() ] }}"
+        }
+      },
+      "id": "49a9d3cd-6f9f-5960-8e2c-e546133f5f34",
+      "name": "🔎 Cari chunk mirip (pgvector)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        440,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "seoPgCredential1",
+          "name": "Postgres · SEO DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $('Input dari agent').first().json;\nconst query = String(input.query || '').trim();\nconst siteFilter = String(input.site || '').trim();\nconst topK = Math.min(Math.max(Number(input.top_k) || Number($env.RAG_TOP_K || 3), 1), 8);\nconst minScore = Number($env.RAG_MIN_SCORE || 0.5);\nconst maxChars = Number($env.RAG_MAX_CHARS_PER_PAGE || 900);\nconst siteName = siteFilter || $env.SITE_NAME || 'website kita';\n\nconst rows = $input.all().map((i) => i.json).filter((r) => r && r.url);\nif (!rows.length) {\n  return [{ json: { result: `NO_RELEVANT_INTERNAL_CONTENT\\nKnowledge base untuk ${siteName} masih kosong. Pastikan website sudah di-index lewat workflow Ingestion.` } }];\n}\n\nconst pages = new Map();\nfor (const r of rows) {\n  const score = Number(r.score);\n  if (!pages.has(r.url)) {\n    pages.set(r.url, { url: r.url, title: r.title, outline: r.outline, word_count: r.word_count, best: score, hits: [] });\n  }\n  const p = pages.get(r.url);\n  p.best = Math.max(p.best, score);\n  const snippet = String(r.text || '').replace(/^Halaman:.*\\nBagian:.*\\n\\n/, '').replace(/\\s+/g, ' ').trim();\n  p.hits.push({ score, section: r.section, snippet });\n}\n\nconst ranked = [...pages.values()].sort((a, b) => b.best - a.best);\nconst relevant = ranked.filter((p) => p.best >= minScore).slice(0, topK);\n\nif (!relevant.length) {\n  const top = ranked[0];\n  return [{ json: { result: [\n    'NO_RELEVANT_INTERNAL_CONTENT',\n    `Query: \"${query}\"${siteFilter ? ` | Website: ${siteFilter}` : ''}`,\n    `Skor tertinggi: ${top.best.toFixed(3)} (${top.url}, \"${top.title}\") di bawah ambang ${minScore}.`,\n    `Artinya ${siteName} kemungkinan BELUM punya konten untuk topik ini (peluang konten baru).`,\n    'Boleh coba sekali lagi dengan query lain (sinonim, versi Inggris/Indonesia, atau subtopik yang lebih sempit).',\n  ].join('\\n') } }];\n}\n\nconst blocks = relevant.map((p, idx) => {\n  let budget = maxChars;\n  const snippets = [];\n  for (const h of p.hits.sort((a, b) => b.score - a.score).slice(0, 3)) {\n    if (budget <= 80) break;\n    const text = h.snippet.length > budget ? `${h.snippet.slice(0, budget - 1)}…` : h.snippet;\n    budget -= text.length;\n    snippets.push(`> [${h.section}] (skor ${h.score.toFixed(3)}) ${text}`);\n  }\n  return [\n    `--- #${idx + 1} ---`,\n    `URL: ${p.url}`,\n    `Similarity: ${p.best.toFixed(3)}`,\n    `Title: ${p.title}`,\n    `Word count: ${p.word_count ?? '-'}`,\n    'OUTLINE:',\n    p.outline || '(belum ada)',\n    'SNIPPETS:',\n    ...snippets,\n  ].join('\\n');\n});\n\nreturn [{ json: { result: [\n  '[INTERNAL_SEARCH_RESULTS]',\n  `Query: \"${query}\"${siteFilter ? ` | Website: ${siteFilter}` : ''} | ambang relevansi ${minScore} | ${relevant.length} halaman relevan`,\n  ...blocks,\n  '[/INTERNAL_SEARCH_RESULTS]',\n].join('\\n') } }];\n"
+      },
+      "id": "8f39a159-3d1c-5cfd-9247-84e9ff17cdb4",
+      "name": "🧾 Format hasil",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Input dari agent": {
+      "main": [
+        [
+          {
+            "node": "🧮 Embed query (Ollama)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧮 Embed query (Ollama)": {
+      "main": [
+        [
+          {
+            "node": "🔎 Cari chunk mirip (pgvector)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔎 Cari chunk mirip (pgvector)": {
+      "main": [
+        [
+          {
+            "node": "🧾 Format hasil",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false,
+  "pinData": {},
+  "versionId": "ed72dfb8-cbfe-5b53-8f0a-a91402c7f8f2",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

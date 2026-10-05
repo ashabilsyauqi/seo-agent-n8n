@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+credentials/*.json
+!credentials/README.md
+n8n/.credentials.json
+n8n/.export/
+n8n/backup/
+.DS_Store
